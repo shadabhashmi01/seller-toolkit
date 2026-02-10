@@ -2,5 +2,5 @@ streamlit
 pytesseract
 pdf2image
 pillow
-opencv-python-headless==4.9.0.80
+numpy
 streamlit-cropper
