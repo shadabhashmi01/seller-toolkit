@@ -1,6 +1,5 @@
 import streamlit as st
 import pytesseract
-import cv2
 import numpy as np
 from PIL import Image
 import io
@@ -239,3 +238,4 @@ with tab2:
 
 st.markdown("---")
 st.caption("Built for real-world use • Camera + Search + Seller tools")
+
