@@ -1,7 +1,6 @@
 import streamlit as st
 import pytesseract
-import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 import io
 import zipfile
 import re
@@ -9,25 +8,22 @@ import hashlib
 from pdf2image import convert_from_bytes
 from streamlit_cropper import st_cropper
 
-# ================= CONFIG =================
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-POPPLER_PATH = r"C:\poppler\Library\bin"
+st.set_page_config(page_title="Document Search & Seller Toolkit", layout="centered")
 
-st.set_page_config(page_title="Search Docs & Seller Toolkit", layout="centered")
-
-st.title("📄 Document Search & 📦 Seller Toolkit")
-st.caption("Search printed documents • Prepare Flipkart/Amazon labels")
+st.title("📄 Document Search + 📦 Seller Toolkit")
+st.caption("Camera OCR • PDF search • Amazon / Flipkart label tools")
 
 tab1, tab2 = st.tabs(["📷 Camera & Document Search", "📦 Seller Label Toolkit"])
 
-# ================= HELPERS =================
+# ---------------- HELPERS ----------------
+
 def clean(t):
     return re.sub(r"[^a-zA-Z0-9]", "", t.lower())
 
 def apply_crop(img):
     if st.session_state.get("apply_all") and "crop_box" in st.session_state:
         x, y, w, h = st.session_state["crop_box"]
-        return img[y:y+h, x:x+w]
+        return img.crop((x, y, x+w, y+h))
     return img
 
 # =====================================================
@@ -39,7 +35,7 @@ with tab1:
         st.session_state.clear()
         st.rerun()
 
-    cam = st.camera_input("📷 Take photo of document")
+    cam = st.camera_input("📷 Take photo")
     upload = st.file_uploader("Upload Image / PDF", type=["png","jpg","jpeg","pdf"])
     query = st.text_input("Search text")
 
@@ -56,186 +52,157 @@ with tab1:
 
     if file and "ocr_done" not in st.session_state:
 
-        images, ocr_data, full_text = [], [], ""
+        images=[]
+        ocr=[]
+        full_text=""
 
-        if upload and upload.type == "application/pdf":
-            pages = convert_from_bytes(upload.getvalue(), dpi=200, poppler_path=POPPLER_PATH)
+        if upload and upload.type=="application/pdf":
+            pages=convert_from_bytes(upload.getvalue(),dpi=200)
         else:
-            pages = [Image.open(file).convert("RGB")]
+            pages=[Image.open(file).convert("RGB")]
 
         for p in pages:
-            img = np.array(p)
-            bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            gray=p.convert("L")
+            data=pytesseract.image_to_data(gray,output_type=pytesseract.Output.DICT)
+            txt=pytesseract.image_to_string(gray)
+            images.append(p)
+            ocr.append(data)
+            full_text+=txt+"\n\n"
 
-            data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
-            txt = pytesseract.image_to_string(gray)
+        st.session_state["images"]=images
+        st.session_state["ocr"]=ocr
+        st.session_state["text"]=full_text
+        st.session_state["ocr_done"]=True
 
-            images.append(bgr)
-            ocr_data.append(data)
-            full_text += txt + "\n\n"
-
-        st.session_state["images"] = images
-        st.session_state["ocr"] = ocr_data
-        st.session_state["text"] = full_text
-        st.session_state["ocr_done"] = True
-
-    matches = []
+    matches=[]
 
     if "images" in st.session_state:
 
         if "selected" not in st.session_state:
-            st.image(cv2.cvtColor(st.session_state["images"][0], cv2.COLOR_BGR2RGB),
-                     use_container_width=True)
+            st.image(st.session_state["images"][0],use_container_width=True)
 
-        for pidx, data in enumerate(st.session_state["ocr"]):
+        for pidx,data in enumerate(st.session_state["ocr"]):
             for i in range(len(data["text"])):
                 if query and clean(query) in clean(data["text"][i]):
-                    matches.append((pidx, i))
+                    matches.append((pidx,i))
 
         if query:
             if matches:
-                st.subheader("Results")
-                for i, (p, w) in enumerate(matches):
+                for i,(p,w) in enumerate(matches):
                     if st.button(f"{i+1}. {st.session_state['ocr'][p]['text'][w]} (Page {p+1})"):
-                        st.session_state["selected"] = (p, w)
+                        st.session_state["selected"]=(p,w)
             else:
-                st.warning("No match found")
+                st.warning("No match")
 
     if "selected" in st.session_state:
-        p, w = st.session_state["selected"]
-        img = st.session_state["images"][p].copy()
-        d = st.session_state["ocr"][p]
-        x, y, ww, hh = d["left"][w], d["top"][w], d["width"][w], d["height"][w]
-        cv2.rectangle(img, (x,y), (x+ww, y+hh), (255,0,0), 3)
-        st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
+        p,w=st.session_state["selected"]
+        img=st.session_state["images"][p].copy()
+        d=st.session_state["ocr"][p]
+        x,y,ww,hh=d["left"][w],d["top"][w],d["width"][w],d["height"][w]
+        draw=ImageDraw.Draw(img)
+        draw.rectangle([x,y,x+ww,y+hh],outline="red",width=3)
+        st.image(img,use_container_width=True)
 
     if "text" in st.session_state:
-        st.text_area("Extracted Text", st.session_state["text"], height=200)
-        st.download_button("⬇ Download Text", st.session_state["text"], file_name="text.txt")
+        st.text_area("Extracted Text",st.session_state["text"],height=200)
+        st.download_button("⬇ Download Text",st.session_state["text"],file_name="text.txt")
 
 # =====================================================
-# TAB 2 — SELLER LABEL TOOLKIT
+# TAB 2 — SELLER TOOLKIT
 # =====================================================
 with tab2:
 
     st.header("📦 Seller Label Toolkit")
     st.caption("Upload → Search → Crop once → Apply to all → Download")
 
-    pdfs = st.file_uploader(
-        "Upload Shipping Label PDFs",
-        type=["pdf"],
-        accept_multiple_files=True
-    )
-
-    search_id = st.text_input("Search Order / Tracking ID (optional)")
+    pdfs=st.file_uploader("Upload Label PDFs",type=["pdf"],accept_multiple_files=True)
+    search_id=st.text_input("Search Order / Tracking (optional)")
 
     if pdfs:
 
-        all_images, all_ocr = [], []
+        labels=[]
+        label_ocr=[]
 
         for pdf in pdfs:
-            pages = convert_from_bytes(pdf.getvalue(), dpi=200, poppler_path=POPPLER_PATH)
+            pages=convert_from_bytes(pdf.getvalue(),dpi=200)
             for p in pages:
-                img = np.array(p)
-                bgr = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
-                all_images.append(bgr)
-                all_ocr.append(data)
+                gray=p.convert("L")
+                data=pytesseract.image_to_data(gray,output_type=pytesseract.Output.DICT)
+                labels.append(p.convert("RGB"))
+                label_ocr.append(data)
 
-        # SEARCH LABELS
-        hits = []
-        s = clean(search_id)
+        hits=[]
+        s=clean(search_id)
 
-        for idx, data in enumerate(all_ocr):
+        for idx,data in enumerate(label_ocr):
             for i in range(len(data["text"])):
                 if s and s in clean(data["text"][i]):
                     hits.append(idx)
 
         if search_id:
-            st.subheader("Found Labels")
             for h in set(hits):
                 if st.button(f"Label {h+1}"):
-                    st.session_state["sel"] = h
+                    st.session_state["sel"]=h
 
-        st.subheader("Click any label to crop")
+        st.subheader("Click any label")
 
-        for i, img in enumerate(all_images):
-            if st.button(f"Select Label {i+1}", key=f"lbl{i}"):
-                st.session_state["sel"] = i
-            st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), width=200)
+        for i,l in enumerate(labels):
+            if st.button(f"Select {i+1}",key=f"s{i}"):
+                st.session_state["sel"]=i
+            st.image(l,width=200)
 
-        # MOUSE CROP
+        # -------- Mouse Crop --------
         if "sel" in st.session_state:
 
-            idx = st.session_state["sel"]
-            original = Image.fromarray(cv2.cvtColor(all_images[idx], cv2.COLOR_BGR2RGB))
+            idx=st.session_state["sel"]
+            original=labels[idx]
 
             st.subheader("✂ Crop with mouse")
 
-            cropped = st_cropper(
-                original,
-                realtime_update=True,
-                box_color="#FF0000"
-            )
+            cropped=st_cropper(original,realtime_update=True,box_color="#FF0000")
 
-            np_crop = np.array(cropped)
-            h, w, _ = np_crop.shape
-            st.session_state["crop_box"] = (0, 0, w, h)
-            st.session_state["apply_all"] = st.checkbox(
-                "Apply this crop to ALL labels (Flipkart recommended)",
-                value=True
-            )
+            w,h=cropped.size
+            st.session_state["crop_box"]=(0,0,w,h)
+            st.session_state["apply_all"]=st.checkbox("Apply crop to ALL labels",value=True)
 
-            st.image(np_crop, use_container_width=True)
+            st.image(cropped,use_container_width=True)
 
-            c1, c2 = st.columns(2)
+            c1,c2=st.columns(2)
 
-            buf = io.BytesIO()
-            cropped.save(buf, format="PNG")
+            buf=io.BytesIO()
+            cropped.save(buf,format="PNG")
             with c1:
-                st.download_button("⬇ Download PNG", buf.getvalue(),
-                                   file_name=f"label_{idx+1}.png")
+                st.download_button("⬇ PNG",buf.getvalue(),file_name=f"label_{idx+1}.png")
 
-            buf2 = io.BytesIO()
-            cropped.save(buf2, format="PDF")
+            buf2=io.BytesIO()
+            cropped.save(buf2,format="PDF")
             with c2:
-                st.download_button("⬇ Download PDF", buf2.getvalue(),
-                                   file_name=f"label_{idx+1}.pdf")
+                st.download_button("⬇ PDF",buf2.getvalue(),file_name=f"label_{idx+1}.pdf")
 
-        # MERGE
-        st.subheader("Merge Selected Labels")
+        # -------- Merge --------
+        st.subheader("Merge Labels")
 
-        selected = []
-        for i in range(len(all_images)):
-            if st.checkbox(f"Merge Label {i+1}", key=f"m{i}"):
+        selected=[]
+        for i in range(len(labels)):
+            if st.checkbox(f"Merge {i+1}",key=f"m{i}"):
                 selected.append(i)
 
         if selected:
-            merged = io.BytesIO()
-            imgs = []
-            for i in selected:
-                img = apply_crop(all_images[i])
-                imgs.append(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+            merged=io.BytesIO()
+            imgs=[apply_crop(labels[i]) for i in selected]
+            imgs[0].save(merged,format="PDF",save_all=True,append_images=imgs[1:])
+            st.download_button("📄 Download Merged PDF",merged.getvalue(),file_name="merged_labels.pdf")
 
-            imgs[0].save(merged, format="PDF", save_all=True, append_images=imgs[1:])
-            st.download_button("📄 Download Merged PDF", merged.getvalue(),
-                               file_name="merged_labels.pdf")
+        # -------- ZIP --------
+        zipbuf=io.BytesIO()
+        with zipfile.ZipFile(zipbuf,"w") as z:
+            for i,l in enumerate(labels):
+                img=apply_crop(l)
+                b=io.BytesIO()
+                img.save(b,format="PNG")
+                z.writestr(f"label_{i+1}.png",b.getvalue())
 
-        # ZIP
-        zipbuf = io.BytesIO()
-        with zipfile.ZipFile(zipbuf, "w") as z:
-            for i, img in enumerate(all_images):
-                final = apply_crop(img)
-                buf = io.BytesIO()
-                Image.fromarray(cv2.cvtColor(final, cv2.COLOR_BGR2RGB)).save(buf, format="PNG")
-                z.writestr(f"label_{i+1}.png", buf.getvalue())
-
-        st.download_button("⬇ Download ALL Labels (ZIP)",
-                           zipbuf.getvalue(),
-                           file_name="all_labels.zip")
+        st.download_button("⬇ Download ALL Labels ZIP",zipbuf.getvalue(),file_name="all_labels.zip")
 
 st.markdown("---")
-st.caption("Built for real-world use • Camera + Search + Seller tools")
-
+st.caption("Built for real-world OCR & ecommerce sellers")
