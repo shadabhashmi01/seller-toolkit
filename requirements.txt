@@ -4,3 +4,4 @@ pdf2image
 pillow
 numpy
 streamlit-cropper
+python-barcode
