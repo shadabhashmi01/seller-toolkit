@@ -30,7 +30,8 @@ def apply_crop(img):
 # TAB 1 — CAMERA / IMAGE / PDF SEARCH
 # =====================================================
 with tab1:
-        st.info("📱 Mobile tip: Camera scanning works great on phone. For large PDFs and seller tools, desktop/laptop gives best performance.")
+
+    st.info("📱 Mobile tip: Camera scanning works great on phone. For large PDFs and seller tools, desktop/laptop gives best performance.")
 
     colA, colB = st.columns(2)
 
@@ -224,5 +225,6 @@ with tab2:
 
 st.markdown("---")
 st.caption("Built for real-world OCR & ecommerce sellers")
+
 
 
