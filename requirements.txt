@@ -5,3 +5,4 @@ pillow
 numpy
 streamlit-cropper
 qrcode
+opencv-python-headless
