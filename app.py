@@ -36,10 +36,14 @@ with tab1:
         st.rerun()
 
     cam = st.camera_input("📷 Take photo")
-    upload = st.file_uploader("Upload Image / PDF", type=["png","jpg","jpeg","pdf"])
-    query = st.text_input("Search text")
+upload = st.file_uploader("Upload Image / PDF", type=["png","jpg","jpeg","pdf"])
+query = st.text_input("Search text")
 
-    file = cam if cam else upload
+if cam:
+    st.session_state["mobile_img"] = cam
+
+file = st.session_state.get("mobile_img") if "mobile_img" in st.session_state else upload
+
 
     if file:
         h = hashlib.md5(file.getvalue()).hexdigest()
@@ -206,3 +210,4 @@ with tab2:
 
 st.markdown("---")
 st.caption("Built for real-world OCR & ecommerce sellers")
+
