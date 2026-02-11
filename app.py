@@ -30,10 +30,24 @@ def apply_crop(img):
 # TAB 1 — CAMERA / IMAGE / PDF SEARCH
 # =====================================================
 with tab1:
+        st.info("📱 Mobile tip: Camera scanning works great on phone. For large PDFs and seller tools, desktop/laptop gives best performance.")
 
-    if st.button("🔄 New Document"):
-        st.session_state.clear()
-        st.rerun()
+    colA, colB = st.columns(2)
+
+    with colA:
+        if st.button("🔄 New Document"):
+            st.session_state.clear()
+            st.rerun()
+
+    with colB:
+        if st.button("🧹 Clear Document"):
+            st.session_state.pop("mobile_img", None)
+            st.session_state.pop("images", None)
+            st.session_state.pop("ocr", None)
+            st.session_state.pop("text", None)
+            st.session_state.pop("selected", None)
+            st.rerun()
+
 
     cam = st.camera_input("📷 Take photo")
 upload = st.file_uploader("Upload Image / PDF", type=["png","jpg","jpeg","pdf"])
@@ -210,4 +224,5 @@ with tab2:
 
 st.markdown("---")
 st.caption("Built for real-world OCR & ecommerce sellers")
+
 
