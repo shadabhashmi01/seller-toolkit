@@ -13,7 +13,7 @@ st.set_page_config(page_title="Document Search & Seller Toolkit", layout="center
 st.title("📄 Document Search + 📦 Seller Toolkit")
 st.caption("Camera OCR • PDF search • Amazon / Flipkart label tools")
 
-tab1, tab2 = st.tabs(["📷 Camera & Document Search", "📦 Seller Label Toolkit"])
+tab1, tab2 = st.tabs(["📷 Ask Your Paper", "📦 Seller Label Toolkit"])
 
 def clean(t):
     return re.sub(r"[^a-zA-Z0-9]", "", t.lower())
@@ -27,95 +27,76 @@ def apply_crop(img):
 # ================= TAB 1 =================
 with tab1:
 
-    st.info("📱 Mobile tip: Camera scanning works great. For large PDFs and seller tools, desktop works best.")
-
-    colA,colB = st.columns(2)
-
-    with colA:
-        if st.button("🔄 New Document"):
-            st.session_state.clear()
-            st.rerun()
-
-    with colB:
-        if st.button("🧹 Clear Document"):
-            for k in ["mobile_img","images","ocr","text","selected"]:
-                st.session_state.pop(k,None)
-            st.rerun()
+    st.markdown("### Ask anything from your document")
+    st.caption("Examples: total amount • invoice number • student name • due date")
 
     cam = st.camera_input("📷 Take photo")
     upload = st.file_uploader("Upload Image / PDF", type=["png","jpg","jpeg","pdf"])
-    query = st.text_input("Search text")
+    question = st.text_input("Ask your paper")
 
+    # Keep camera image on mobile
     if cam:
-        st.session_state["mobile_img"] = cam
+        st.session_state["paper_img"] = cam
 
-    file = st.session_state.get("mobile_img") if "mobile_img" in st.session_state else upload
+    file = st.session_state.get("paper_img") if "paper_img" in st.session_state else upload
 
     if file:
-        h = hashlib.md5(file.getvalue()).hexdigest()
-    else:
-        h = None
 
-    if h and st.session_state.get("doc_hash") != h:
-        st.session_state.clear()
-        st.session_state["doc_hash"] = h
+        if "paper_done" not in st.session_state:
 
-    if file and "ocr_done" not in st.session_state:
+            images = []
+            words = []
 
-        images=[]
-        ocr=[]
-        full_text=""
-
-        if upload and upload.type=="application/pdf":
-            pages=convert_from_bytes(upload.getvalue(),dpi=200)
-        else:
-            pages=[Image.open(file).convert("RGB")]
-
-        for p in pages:
-            gray=p.convert("L")
-            data=pytesseract.image_to_data(gray,output_type=pytesseract.Output.DICT)
-            txt=pytesseract.image_to_string(gray)
-            images.append(p)
-            ocr.append(data)
-            full_text+=txt+"\n\n"
-
-        st.session_state["images"]=images
-        st.session_state["ocr"]=ocr
-        st.session_state["text"]=full_text
-        st.session_state["ocr_done"]=True
-
-    matches=[]
-
-    if "images" in st.session_state:
-
-        if "selected" not in st.session_state:
-            st.image(st.session_state["images"][0],use_container_width=True)
-
-        for pidx,data in enumerate(st.session_state["ocr"]):
-            for i in range(len(data["text"])):
-                if query and clean(query) in clean(data["text"][i]):
-                    matches.append((pidx,i))
-
-        if query:
-            if matches:
-                for i,(p,w) in enumerate(matches):
-                    if st.button(f"{i+1}. {st.session_state['ocr'][p]['text'][w]} (Page {p+1})"):
-                        st.session_state["selected"]=(p,w)
+            if upload and upload.type == "application/pdf":
+                pages = convert_from_bytes(upload.getvalue(), dpi=200)
             else:
-                st.warning("No match")
+                pages = [Image.open(file).convert("RGB")]
 
-    if "selected" in st.session_state:
-        p,w=st.session_state["selected"]
-        img=st.session_state["images"][p].copy()
-        d=st.session_state["ocr"][p]
-        x,y,ww,hh=d["left"][w],d["top"][w],d["width"][w],d["height"][w]
-        draw=ImageDraw.Draw(img)
-        draw.rectangle([x,y,x+ww,y+hh],outline="red",width=3)
-        st.image(img,use_container_width=True)
+            with st.spinner("Reading document..."):
+                for p in pages:
+                    gray = p.convert("L")
+                    data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+                    images.append(p)
+                    words.append(data)
 
-    if "text" in st.session_state:
-        st.text_area("Extracted Text",st.session_state["text"],height=200)
-        st.download_button("⬇ Download Text",st.session_state["text"],file_name="text.txt")
+            st.session_state["paper_images"] = images
+            st.session_state["paper_words"] = words
+            st.session_state["paper_done"] = True
+
+    # Simple smart keyword matching
+    if question and "paper_words" in st.session_state:
+
+        q = clean(question)
+        best = None
+
+        for pi, data in enumerate(st.session_state["paper_words"]):
+            for i in range(len(data["text"])):
+                t = clean(data["text"][i])
+                if q in t or t in q:
+                    best = (pi, i)
+                    break
+            if best:
+                break
+
+        if best:
+
+            p, w = best
+            img = st.session_state["paper_images"][p].copy()
+            d = st.session_state["paper_words"][p]
+
+            x,y,ww,hh = d["left"][w], d["top"][w], d["width"][w], d["height"][w]
+
+            draw = ImageDraw.Draw(img)
+            draw.rectangle([x,y,x+ww,y+hh], outline="red", width=3)
+
+            found = d["text"][w]
+
+            st.success(f"Answer: {found}")
+            st.image(img, use_container_width=True)
+
+        else:
+            st.warning("Couldn't find that. Try simpler words like: amount, name, date.")
+
 
 # ================= TAB 2 =================
 with tab2:
@@ -226,3 +207,4 @@ with tab2:
 
 st.markdown("---")
 st.caption("Built for real-world OCR & ecommerce sellers")
+
