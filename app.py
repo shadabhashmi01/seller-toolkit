@@ -1,6 +1,6 @@
 import streamlit as st
 import pytesseract
-from PIL import Image, ImageDraw, ImageEnhance
+from PIL import Image, ImageDraw
 import cv2
 import numpy as np
 import io, zipfile, re, hashlib
@@ -11,9 +11,7 @@ import qrcode
 st.set_page_config(page_title="Paper Tools", layout="centered")
 st.title("📄 Paper Tools")
 
-tab1, tab2, tab3 = st.tabs(["🔍 Search Paper", "📦 Seller Labels", "🔗 QR / Barcode"])
-
-# ---------------- helpers ----------------
+tab1, tab2, tab3 = st.tabs(["🔍 Search Paper", "📦 Seller Labels", "🔗 QR Generator"])
 
 def clean(t):
     return re.sub(r"[^a-zA-Z0-9]", "", str(t).lower())
@@ -21,20 +19,19 @@ def clean(t):
 def preprocess(img):
     npimg = np.array(img)
     gray = cv2.cvtColor(npimg, cv2.COLOR_RGB2GRAY)
-
-    # auto rotate
     try:
         osd = pytesseract.image_to_osd(gray)
         rot = int(re.search("Rotate: (\d+)", osd).group(1))
-        if rot != 0:
+        if rot == 90:
             gray = cv2.rotate(gray, cv2.ROTATE_90_CLOCKWISE)
+        elif rot == 180:
+            gray = cv2.rotate(gray, cv2.ROTATE_180)
+        elif rot == 270:
+            gray = cv2.rotate(gray, cv2.ROTATE_90_COUNTERCLOCKWISE)
     except:
         pass
-
-    gray = cv2.adaptiveThreshold(gray,255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+    gray = cv2.adaptiveThreshold(gray,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,11,2)
-
     return Image.fromarray(gray)
 
 def highlight(img, data, idx):
@@ -43,16 +40,7 @@ def highlight(img, data, idx):
     draw.rectangle([x,y,x+w,y+h], outline="red", width=3)
     return img
 
-def apply_crop(img):
-    if st.session_state.get("apply_all") and "crop_box" in st.session_state:
-        x,y,w,h = st.session_state["crop_box"]
-        return img.crop((x,y,x+w,y+h))
-    return img
-
-# =====================================================
-# TAB 1 SEARCH PAPER
-# =====================================================
-
+# ================= TAB 1 =================
 with tab1:
 
     cam = st.camera_input("Take photo")
@@ -72,25 +60,25 @@ with tab1:
 
             imgs=[]
             ocr=[]
-            fulltext=""
+            text=""
 
             if upload and upload.type=="application/pdf":
                 pages = convert_from_bytes(upload.getvalue(), dpi=200)
             else:
-                pages = [Image.open(file).convert("RGB")]
+                pages=[Image.open(file).convert("RGB")]
 
-            with st.spinner("Processing document..."):
+            with st.spinner("Processing..."):
                 for p in pages:
-                    fixed = preprocess(p)
-                    data = pytesseract.image_to_data(fixed, output_type=pytesseract.Output.DICT)
-                    txt = pytesseract.image_to_string(fixed)
+                    fixed=preprocess(p)
+                    data=pytesseract.image_to_data(fixed,output_type=pytesseract.Output.DICT)
+                    txt=pytesseract.image_to_string(fixed)
                     imgs.append(p)
                     ocr.append(data)
-                    fulltext += txt+"\n\n"
+                    text+=txt+"\n\n"
 
             st.session_state["imgs1"]=imgs
             st.session_state["ocr1"]=ocr
-            st.session_state["text1"]=fulltext
+            st.session_state["text1"]=text
 
         st.image(st.session_state["imgs1"][0], use_container_width=True)
 
@@ -107,21 +95,17 @@ with tab1:
 
             if found:
                 p,w=found
-                img=st.session_state["imgs1"][p].copy()
-                img=highlight(img, st.session_state["ocr1"][p], w)
-                st.success(f"Found: {st.session_state['ocr1'][p]['text'][w]}")
+                img=highlight(st.session_state["imgs1"][p].copy(), st.session_state["ocr1"][p], w)
+                st.success("Found")
                 st.image(img,use_container_width=True)
             else:
                 st.warning("Not found")
 
-# =====================================================
-# TAB 2 SELLER LABELS
-# =====================================================
-
+# ================= TAB 2 =================
 with tab2:
 
     pdfs = st.file_uploader("Upload Label PDFs", type=["pdf"], accept_multiple_files=True)
-    search_id = st.text_input("Search Order / Tracking")
+    search = st.text_input("Search Order / Tracking")
 
     if pdfs:
 
@@ -129,63 +113,44 @@ with tab2:
         label_ocr=[]
 
         for pdf in pdfs:
-            pages = convert_from_bytes(pdf.getvalue(), dpi=200)
+            pages=convert_from_bytes(pdf.getvalue(),dpi=200)
             for p in pages:
-                fixed = preprocess(p)
-                data=pytesseract.image_to_data(fixed, output_type=pytesseract.Output.DICT)
+                fixed=preprocess(p)
+                data=pytesseract.image_to_data(fixed,output_type=pytesseract.Output.DICT)
                 labels.append(p)
                 label_ocr.append(data)
 
-        matches=[]
-        if search_id:
+        st.subheader("All labels")
+        for i,l in enumerate(labels):
+            st.image(l,width=200)
+
+        if search:
+
             for li,data in enumerate(label_ocr):
                 for i in range(len(data["text"])):
-                    if clean(search_id) in clean(data["text"][i]):
-                        matches.append((li,i))
+                    if clean(search) in clean(data["text"][i]):
 
-        if matches:
-            for n,(li,wi) in enumerate(matches):
-                if st.button(f"Open Label {li+1}", key=f"x{n}"):
-                    img=highlight(labels[li].copy(), label_ocr[li], wi)
-                    st.image(img,use_container_width=True)
+                        img=highlight(labels[li].copy(),label_ocr[li],i)
+                        st.image(img,use_container_width=True)
 
-                    buf=io.BytesIO()
-                    img.save(buf,"PNG")
-                    st.download_button("⬇ Download This Label", buf.getvalue(), file_name=f"label_{li+1}.png")
+                        buf=io.BytesIO()
+                        img.save(buf,"PNG")
+                        st.download_button("⬇ Download This Label",buf.getvalue(),file_name=f"label_{li+1}.png")
 
-        if "sel" in st.session_state:
-            cropped=st_cropper(labels[st.session_state["sel"]], realtime_update=True)
-            w,h=cropped.size
-            st.session_state["crop_box"]=(0,0,w,h)
-            st.session_state["apply_all"]=st.checkbox("Apply crop to all")
+                        break
 
-# =====================================================
-# TAB 3 QR / BARCODE
-# =====================================================
-
+# ================= TAB 3 =================
 with tab3:
 
-    st.markdown("### Website → QR or Image → QR")
+    st.markdown("### Website / Text → QR Code")
 
-    url = st.text_input("Enter website / text")
+    txt = st.text_input("Enter website or text")
 
-    img_upload = st.file_uploader("Or upload image to encode", type=["png","jpg","jpeg"])
-
-    if url:
-        qr=qrcode.make(url)
+    if txt:
+        qr=qrcode.make(txt)
         buf=io.BytesIO()
         qr.save(buf,"PNG")
         st.image(buf.getvalue())
         st.download_button("⬇ Download QR", buf.getvalue(), file_name="qr.png")
 
-    if img_upload:
-        img = Image.open(img_upload)
-        buf=io.BytesIO()
-        img.save(buf,"PNG")
-        qr=qrcode.make(buf.getvalue())
-        out=io.BytesIO()
-        qr.save(out,"PNG")
-        st.image(out.getvalue())
-        st.download_button("⬇ Download Image QR", out.getvalue(), file_name="image_qr.png")
-
-st.caption("Enhanced OCR with rotation + handwriting support")
+st.caption("Free OCR + Seller Tools")
