@@ -120,7 +120,7 @@ with tab1:
 
             else:
                 st.warning("Could not find a matching answer. Try simpler keywords like amount, date, name.")
- ================= TAB 2 =================
+# ================= TAB 2 =================
 with tab2:
 
     st.header("📦 Seller Label Toolkit")
@@ -229,5 +229,6 @@ with tab2:
 
 st.markdown("---")
 st.caption("Built for real-world OCR & ecommerce sellers")
+
 
 
