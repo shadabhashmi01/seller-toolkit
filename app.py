@@ -1,24 +1,19 @@
 import streamlit as st
 import pytesseract
 from PIL import Image, ImageDraw
-import io
-import zipfile
-import re
-import hashlib
+import io, zipfile, re, hashlib
 from pdf2image import convert_from_bytes
 from streamlit_cropper import st_cropper
 import barcode
 from barcode.writer import ImageWriter
 
 st.set_page_config(page_title="Paper Tools", layout="centered")
-
 st.title("📄 Paper Tools")
-st.caption("Search documents • Seller labels • Barcode generator")
+st.caption("Search documents • Seller labels • Scannable barcodes")
 
 tab1, tab2, tab3 = st.tabs(["🔍 Search Paper", "📦 Seller Labels", "🏷 Text → Barcode"])
 
 # ---------------- helpers ----------------
-
 def clean(t):
     return re.sub(r"[^a-zA-Z0-9]", "", str(t).lower())
 
@@ -28,13 +23,17 @@ def highlight(img, data, idx):
     draw.rectangle([x,y,x+w,y+h], outline="red", width=3)
     return img
 
+def apply_crop(img):
+    if st.session_state.get("apply_all") and "crop_box" in st.session_state:
+        x,y,w,h = st.session_state["crop_box"]
+        return img.crop((x,y,x+w,y+h))
+    return img
+
 # =====================================================
 # TAB 1 — SEARCH PAPER (Camera / Image / PDF)
 # =====================================================
 with tab1:
-
     st.markdown("### 🔍 Search Paper")
-
     cam = st.camera_input("Take photo")
     upload = st.file_uploader("Upload Image or PDF", type=["png","jpg","jpeg","pdf"])
     query = st.text_input("Search word / number")
@@ -42,44 +41,34 @@ with tab1:
     file = cam if cam else upload
 
     if file:
-
         h = hashlib.md5(file.getvalue()).hexdigest()
-
         if st.session_state.get("hash1") != h:
             st.session_state.clear()
             st.session_state["hash1"] = h
 
         if "ocr1" not in st.session_state:
-
-            imgs=[]
-            ocr=[]
-
+            imgs, ocr = [], []
             if upload and upload.type=="application/pdf":
                 pages = convert_from_bytes(upload.getvalue(), dpi=200)
             else:
                 pages = [Image.open(file).convert("RGB")]
-
             with st.spinner("Reading document..."):
                 for p in pages:
                     gray = p.convert("L")
                     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
                     imgs.append(p)
                     ocr.append(data)
-
             st.session_state["imgs1"]=imgs
             st.session_state["ocr1"]=ocr
 
         st.image(st.session_state["imgs1"][0], use_container_width=True)
 
         if query:
-
             found=None
-
             for pi,data in enumerate(st.session_state["ocr1"]):
                 for i in range(len(data["text"])):
                     if clean(query) in clean(data["text"][i]):
-                        found=(pi,i)
-                        break
+                        found=(pi,i); break
                 if found: break
 
             if found:
@@ -95,20 +84,13 @@ with tab1:
 # TAB 2 — SELLER LABELS
 # =====================================================
 with tab2:
-
-    # stop camera session when entering seller tab
-    st.session_state.pop("imgs1",None)
-    st.session_state.pop("ocr1",None)
-
     st.markdown("### 📦 Seller Labels")
 
     pdfs = st.file_uploader("Upload Label PDFs", type=["pdf"], accept_multiple_files=True)
     search_id = st.text_input("Search Order / Tracking")
 
     if pdfs:
-
-        labels=[]
-        label_ocr=[]
+        labels, label_ocr = [], []
 
         for pdf in pdfs:
             pages = convert_from_bytes(pdf.getvalue(), dpi=200)
@@ -118,56 +100,99 @@ with tab2:
                 labels.append(p.convert("RGB"))
                 label_ocr.append(data)
 
+        # ---- SEARCH + HIGHLIGHT ----
         matches=[]
-
         if search_id:
             for li,data in enumerate(label_ocr):
                 for i in range(len(data["text"])):
                     if clean(search_id) in clean(data["text"][i]):
                         matches.append((li,i))
 
-        if matches:
-            st.success(f"{len(matches)} result(s) found")
-
-            for n,(li,wi) in enumerate(matches):
-                if st.button(f"Open Label {li+1}", key=f"hit{n}"):
-
-                    img = labels[li].copy()
-                    img = highlight(img, label_ocr[li], wi)
-                    st.image(img, use_container_width=True)
-
-        elif search_id:
-            st.warning("Not found")
+        if search_id:
+            if matches:
+                st.success(f"{len(matches)} result(s) found")
+                for n,(li,wi) in enumerate(matches):
+                    if st.button(f"Open Label {li+1}", key=f"hit{n}"):
+                        st.session_state["sel"]=li
+                        st.session_state.pop("action",None)
+                        img = labels[li].copy()
+                        img = highlight(img, label_ocr[li], wi)
+                        st.image(img, use_container_width=True)
+            else:
+                st.warning("Not found")
 
         st.subheader("All labels")
-
         for i,l in enumerate(labels):
+            if st.button(f"Select {i+1}", key=f"s{i}"):
+                st.session_state["sel"]=i
+                st.session_state.pop("action",None)
             st.image(l,width=200)
 
+        # ---- ACTIONS ----
+        if "sel" in st.session_state:
+            idx=st.session_state["sel"]
+            original=labels[idx]
+            st.subheader("Choose action")
+            c1,c2,c3=st.columns(3)
+            with c1:
+                if st.button("✂ Crop Label"):
+                    st.session_state["action"]="crop"
+            with c2:
+                if st.button("📄 Merge Selected"):
+                    st.session_state["action"]="merge"
+            with c3:
+                if st.button("⬇ Download All"):
+                    st.session_state["action"]="zip"
+
+        # ---- CROP ----
+        if st.session_state.get("action")=="crop":
+            st.subheader("✂ Crop with mouse")
+            cropped=st_cropper(original,realtime_update=True,box_color="#FF0000")
+            w,h=cropped.size
+            st.session_state["crop_box"]=(0,0,w,h)
+            st.session_state["apply_all"]=st.checkbox("Apply crop to ALL labels",value=True)
+            st.image(cropped,use_container_width=True)
+            buf=io.BytesIO()
+            cropped.save(buf,format="PNG")
+            st.download_button("⬇ Download Cropped PNG",buf.getvalue(),file_name=f"label_{idx+1}.png")
+
+        # ---- MERGE ----
+        if st.session_state.get("action")=="merge":
+            st.subheader("Select labels to merge")
+            selected=[]
+            for i in range(len(labels)):
+                if st.checkbox(f"Merge {i+1}", key=f"m{i}"):
+                    selected.append(i)
+            if selected:
+                merged=io.BytesIO()
+                imgs=[apply_crop(labels[i]) for i in selected]
+                imgs[0].save(merged,format="PDF",save_all=True,append_images=imgs[1:])
+                st.download_button("📄 Download Merged PDF",merged.getvalue(),file_name="merged_labels.pdf")
+
+        # ---- ZIP ALL ----
+        if st.session_state.get("action")=="zip":
+            zipbuf=io.BytesIO()
+            with zipfile.ZipFile(zipbuf,"w") as z:
+                for i,l in enumerate(labels):
+                    img=apply_crop(l)
+                    b=io.BytesIO()
+                    img.save(b,format="PNG")
+                    z.writestr(f"label_{i+1}.png",b.getvalue())
+            st.download_button("⬇ Download ALL Labels ZIP",zipbuf.getvalue(),file_name="all_labels.zip")
+
 # =====================================================
-# TAB 3 — TEXT TO BARCODE
+# TAB 3 — TEXT TO SCANNABLE BARCODE
 # =====================================================
 with tab3:
-
-    st.markdown("### 🏷 Convert Text to Barcode")
-
+    st.markdown("### 🏷 Convert Text to Scannable Barcode (Code128)")
     txt = st.text_input("Enter any text / tracking number")
-
     if txt:
-
         CODE128 = barcode.get_barcode_class('code128')
         code = CODE128(txt, writer=ImageWriter())
-
         buffer = io.BytesIO()
         code.write(buffer)
-
         st.image(buffer.getvalue())
-
-        st.download_button(
-            "⬇ Download Barcode",
-            buffer.getvalue(),
-            file_name="barcode.png"
-        )
+        st.download_button("⬇ Download Barcode PNG", buffer.getvalue(), file_name="barcode.png")
 
 st.markdown("---")
-st.caption("Simple tools for paper + sellers")
+st.caption("Simple tools for paper + ecommerce sellers")
