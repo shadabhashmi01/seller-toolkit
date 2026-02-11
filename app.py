@@ -4,14 +4,13 @@ from PIL import Image, ImageDraw
 import io, zipfile, re, hashlib
 from pdf2image import convert_from_bytes
 from streamlit_cropper import st_cropper
-import barcode
-from barcode.writer import ImageWriter
+import qrcode
 
 st.set_page_config(page_title="Paper Tools", layout="centered")
 st.title("📄 Paper Tools")
-st.caption("Search documents • Seller labels • Scannable barcodes")
+st.caption("Search documents • Seller labels • QR generator")
 
-tab1, tab2, tab3 = st.tabs(["🔍 Search Paper", "📦 Seller Labels", "🏷 Text → Barcode"])
+tab1, tab2, tab3 = st.tabs(["🔍 Search Paper", "📦 Seller Labels", "🔗 QR Generator"])
 
 # ---------------- helpers ----------------
 def clean(t):
@@ -30,15 +29,19 @@ def apply_crop(img):
     return img
 
 # =====================================================
-# TAB 1 — SEARCH PAPER (Camera / Image / PDF)
+# TAB 1 — SEARCH PAPER
 # =====================================================
 with tab1:
-    st.markdown("### 🔍 Search Paper")
+
+    st.session_state.pop("seller_active", None)
+
     cam = st.camera_input("Take photo")
     upload = st.file_uploader("Upload Image or PDF", type=["png","jpg","jpeg","pdf"])
     query = st.text_input("Search word / number")
 
     file = cam if cam else upload
+
+    extracted_text = ""
 
     if file:
         h = hashlib.md5(file.getvalue()).hexdigest()
@@ -48,20 +51,30 @@ with tab1:
 
         if "ocr1" not in st.session_state:
             imgs, ocr = [], []
+
             if upload and upload.type=="application/pdf":
                 pages = convert_from_bytes(upload.getvalue(), dpi=200)
             else:
                 pages = [Image.open(file).convert("RGB")]
+
             with st.spinner("Reading document..."):
                 for p in pages:
                     gray = p.convert("L")
                     data = pytesseract.image_to_data(gray, output_type=pytesseract.Output.DICT)
+                    text = pytesseract.image_to_string(gray)
+                    extracted_text += text + "\n\n"
                     imgs.append(p)
                     ocr.append(data)
+
             st.session_state["imgs1"]=imgs
             st.session_state["ocr1"]=ocr
+            st.session_state["text1"]=extracted_text
 
         st.image(st.session_state["imgs1"][0], use_container_width=True)
+
+        # Show extracted text
+        st.text_area("Extracted Text", st.session_state.get("text1",""), height=200)
+        st.download_button("⬇ Download Text", st.session_state.get("text1",""), file_name="document.txt")
 
         if query:
             found=None
@@ -84,6 +97,11 @@ with tab1:
 # TAB 2 — SELLER LABELS
 # =====================================================
 with tab2:
+
+    st.session_state["seller_active"] = True
+    st.session_state.pop("imgs1", None)
+    st.session_state.pop("ocr1", None)
+
     st.markdown("### 📦 Seller Labels")
 
     pdfs = st.file_uploader("Upload Label PDFs", type=["pdf"], accept_multiple_files=True)
@@ -100,7 +118,6 @@ with tab2:
                 labels.append(p.convert("RGB"))
                 label_ocr.append(data)
 
-        # ---- SEARCH + HIGHLIGHT ----
         matches=[]
         if search_id:
             for li,data in enumerate(label_ocr):
@@ -118,6 +135,11 @@ with tab2:
                         img = labels[li].copy()
                         img = highlight(img, label_ocr[li], wi)
                         st.image(img, use_container_width=True)
+
+                        # Download ONLY this label
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        st.download_button("⬇ Download THIS Label", buf.getvalue(), file_name=f"label_{li+1}.png")
             else:
                 st.warning("Not found")
 
@@ -128,11 +150,11 @@ with tab2:
                 st.session_state.pop("action",None)
             st.image(l,width=200)
 
-        # ---- ACTIONS ----
         if "sel" in st.session_state:
             idx=st.session_state["sel"]
             original=labels[idx]
             st.subheader("Choose action")
+
             c1,c2,c3=st.columns(3)
             with c1:
                 if st.button("✂ Crop Label"):
@@ -144,21 +166,13 @@ with tab2:
                 if st.button("⬇ Download All"):
                     st.session_state["action"]="zip"
 
-        # ---- CROP ----
         if st.session_state.get("action")=="crop":
-            st.subheader("✂ Crop with mouse")
             cropped=st_cropper(original,realtime_update=True,box_color="#FF0000")
             w,h=cropped.size
             st.session_state["crop_box"]=(0,0,w,h)
             st.session_state["apply_all"]=st.checkbox("Apply crop to ALL labels",value=True)
-            st.image(cropped,use_container_width=True)
-            buf=io.BytesIO()
-            cropped.save(buf,format="PNG")
-            st.download_button("⬇ Download Cropped PNG",buf.getvalue(),file_name=f"label_{idx+1}.png")
 
-        # ---- MERGE ----
         if st.session_state.get("action")=="merge":
-            st.subheader("Select labels to merge")
             selected=[]
             for i in range(len(labels)):
                 if st.checkbox(f"Merge {i+1}", key=f"m{i}"):
@@ -169,7 +183,6 @@ with tab2:
                 imgs[0].save(merged,format="PDF",save_all=True,append_images=imgs[1:])
                 st.download_button("📄 Download Merged PDF",merged.getvalue(),file_name="merged_labels.pdf")
 
-        # ---- ZIP ALL ----
         if st.session_state.get("action")=="zip":
             zipbuf=io.BytesIO()
             with zipfile.ZipFile(zipbuf,"w") as z:
@@ -181,18 +194,22 @@ with tab2:
             st.download_button("⬇ Download ALL Labels ZIP",zipbuf.getvalue(),file_name="all_labels.zip")
 
 # =====================================================
-# TAB 3 — TEXT TO SCANNABLE BARCODE
+# TAB 3 — QR GENERATOR
 # =====================================================
 with tab3:
-    st.markdown("### 🏷 Convert Text to Scannable Barcode (Code128)")
-    txt = st.text_input("Enter any text / tracking number")
-    if txt:
-        CODE128 = barcode.get_barcode_class('code128')
-        code = CODE128(txt, writer=ImageWriter())
-        buffer = io.BytesIO()
-        code.write(buffer)
-        st.image(buffer.getvalue())
-        st.download_button("⬇ Download Barcode PNG", buffer.getvalue(), file_name="barcode.png")
+
+    st.session_state.pop("imgs1", None)
+    st.session_state.pop("ocr1", None)
+
+    st.markdown("### 🔗 QR Code Generator (opens website on scan)")
+    url = st.text_input("Enter website / text")
+
+    if url:
+        qr = qrcode.make(url)
+        buf = io.BytesIO()
+        qr.save(buf, format="PNG")
+        st.image(buf.getvalue())
+        st.download_button("⬇ Download QR", buf.getvalue(), file_name="qr.png")
 
 st.markdown("---")
 st.caption("Simple tools for paper + ecommerce sellers")
