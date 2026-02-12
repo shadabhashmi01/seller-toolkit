@@ -128,103 +128,125 @@ with tab1:
 # TAB 2 — SELLER TOOLKIT
 # =====================================================
 with tab2:
-    pdfs = st.file_uploader("Upload Label PDFs", type=["pdf"], accept_multiple_files=True)
-    search = st.text_input("Search Order / Tracking")
+
+    st.subheader("📤 Upload Label PDFs")
+    pdfs = st.file_uploader("Select PDFs", type=["pdf"], accept_multiple_files=True)
+
+    @st.cache_data(show_spinner=False)
+    def load_labels(files):
+        labels=[]
+        records=[]
+        seen=set()
+
+        for pdf in files:
+            pages=convert_from_bytes(pdf.getvalue(),dpi=200)
+
+            for page in pages:
+                fixed=preprocess(page)
+                text=pytesseract.image_to_string(fixed,config="--psm 6")
+
+                product=detect_product(text)
+                size=detect_size(text)
+                oid=extract_order_id(text)
+
+                if oid and oid in seen:
+                    continue
+                if oid:
+                    seen.add(oid)
+
+                labels.append(page)
+                records.append({
+                    "product":product,
+                    "size":size,
+                    "order_id":oid
+                })
+
+        return labels, pd.DataFrame(records)
 
     if pdfs:
-        labels=[]; records=[]; seen=set()
-        with st.spinner("Processing labels..."):
-            for pdf in pdfs:
-                pages=convert_from_bytes(pdf.getvalue(),dpi=200)
-                for page in pages:
-                    fixed=preprocess(page)
-                    text=pytesseract.image_to_string(fixed,config="--psm 6")
-                    product=detect_product(text)
-                    size=detect_size(text)
-                    oid=extract_order_id(text)
-                    if oid and oid in seen: continue
-                    if oid: seen.add(oid)
-                    labels.append(page)
-                    records.append({"product":product,"size":size,"order_id":oid})
 
-        df=pd.DataFrame(records)
-        summary=df.groupby(["product","size"]).size().reset_index(name="quantity")
-        st.subheader("Grouped Summary")
+        with st.spinner("Reading labels (cached)…"):
+            labels, df = load_labels(pdfs)
+
+        # SUMMARY
+        st.subheader("📊 Summary")
+        summary=df.groupby(["product","size"]).size().reset_index(name="qty")
         st.dataframe(summary,use_container_width=True)
 
-        # Packing Excel
-        xbuf=io.BytesIO(); summary.to_excel(xbuf,index=False)
-        st.download_button("⬇ Download Packing Excel",xbuf.getvalue(),"packing.xlsx")
+        # SEARCH
+        st.subheader("🔎 Search Order ID")
+        search=st.text_input("Enter Order / Tracking")
 
-        # Search & download single label
         if search:
-            for li,row in df.iterrows():
+            for i,row in df.iterrows():
                 if row["order_id"] and clean(search) in clean(row["order_id"]):
-                    img=labels[li]
-                    st.image(img,use_container_width=True)
-                    b=io.BytesIO(); img.save(b,"PNG")
-                    st.download_button("⬇ Download THIS Label",b.getvalue(),f"label_{li+1}.png")
+                    st.image(labels[i],use_container_width=True)
+                    b=io.BytesIO(); labels[i].save(b,"PNG")
+                    st.download_button("⬇ Download This Label",b.getvalue(),f"label_{i+1}.png")
                     break
 
-        # Manual select + actions
-        st.subheader("All Labels")
-        for i,l in enumerate(labels):
-            if st.button(f"Select {i+1}",key=f"s{i}"):
-                st.session_state["sel"]=i
-                st.session_state.pop("action",None)
-            st.image(l,width=200)
+        # ACTION PANEL
+        st.subheader("🧰 Actions")
 
-        if "sel" in st.session_state:
-            original=labels[st.session_state["sel"]]
-            c1,c2,c3=st.columns(3)
-            with c1:
-                if st.button("✂ Crop"): st.session_state["action"]="crop"
-            with c2:
-                if st.button("📄 Merge Selected"): st.session_state["action"]="merge"
-            with c3:
-                if st.button("⬇ ZIP All"): st.session_state["action"]="zip"
+        c1,c2,c3=st.columns(3)
+        with c1:
+            if st.button("✂ Crop"):
+                st.session_state["action"]="crop"
+        with c2:
+            if st.button("📄 Merge"):
+                st.session_state["action"]="merge"
+        with c3:
+            if st.button("⬇ ZIP All"):
+                st.session_state["action"]="zip"
 
-        # Crop
+        # CROPPING
         if st.session_state.get("action")=="crop":
-            cropped=st_cropper(original,realtime_update=True)
+            st.subheader("Crop First Label (apply to all optional)")
+            cropped=st_cropper(labels[0],realtime_update=True)
             w,h=cropped.size
             st.session_state["crop_box"]=(0,0,w,h)
             st.session_state["apply_all"]=st.checkbox("Apply crop to ALL labels",value=True)
+
             buf=io.BytesIO(); cropped.save(buf,"PNG")
-            st.download_button("⬇ Download Cropped Label",buf.getvalue(),"cropped.png")
+            st.download_button("⬇ Download Cropped Sample",buf.getvalue(),"cropped.png")
 
-        # Merge selected
+        # MERGE
         if st.session_state.get("action")=="merge":
-            sel=[]
-            for i in range(len(labels)):
-                if st.checkbox(f"Merge {i+1}",key=f"m{i}"): sel.append(i)
-            if sel:
-                mbuf=io.BytesIO()
-                imgs=[apply_crop(labels[i]) for i in sel]
-                imgs[0].save(mbuf,format="PDF",save_all=True,append_images=imgs[1:])
-                st.download_button("⬇ Download Merged PDF",mbuf.getvalue(),"merged.pdf")
+            merged=io.BytesIO()
+            imgs=[apply_crop(l) for l in labels]
+            imgs[0].save(merged,format="PDF",save_all=True,append_images=imgs[1:])
+            st.download_button("⬇ Download Merged PDF",merged.getvalue(),"merged.pdf")
 
-        # ZIP all
+        # ZIP
         if st.session_state.get("action")=="zip":
             zbuf=io.BytesIO()
             with zipfile.ZipFile(zbuf,"w") as z:
                 for i,l in enumerate(labels):
                     img=apply_crop(l); b=io.BytesIO(); img.save(b,"PNG")
                     z.writestr(f"label_{i+1}.png",b.getvalue())
-            st.download_button("⬇ Download All Labels ZIP",zbuf.getvalue(),"labels.zip")
+            st.download_button("⬇ Download ZIP",zbuf.getvalue(),"labels.zip")
 
-        # Grouped PDFs
+        # GROUPED PDF
+        st.subheader("📦 Grouped PDFs")
+
         grouped={}
         for i,row in df.iterrows():
             key=f"{row['product']} - {row['size']}"
             grouped.setdefault(key,[]).append(labels[i])
+
         gbuf=io.BytesIO()
         with zipfile.ZipFile(gbuf,"w") as z:
             for k,imgs in grouped.items():
                 pbuf=io.BytesIO()
                 imgs[0].save(pbuf,format="PDF",save_all=True,append_images=imgs[1:])
                 z.writestr(f"{k}.pdf",pbuf.getvalue())
-        st.download_button("⬇ Download Grouped PDFs (ZIP)",gbuf.getvalue(),"grouped_labels.zip")
+
+        st.download_button("⬇ Download Grouped PDFs ZIP",gbuf.getvalue(),"grouped_labels.zip")
+
+        # PACKING EXCEL
+        xbuf=io.BytesIO()
+        summary.to_excel(xbuf,index=False)
+        st.download_button("⬇ Download Packing Excel",xbuf.getvalue(),"packing.xlsx")
 
 # =====================================================
 # TAB 3 — SMART PRODUCT DETECTION (SINGLE IMAGE)
@@ -242,3 +264,4 @@ with tab3:
         st.write("Product:", detect_product(text))
         st.write("Size:", detect_size(text))
         st.write("Order ID:", extract_order_id(text))
+
