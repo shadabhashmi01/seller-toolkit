@@ -5,3 +5,5 @@ pillow
 numpy
 streamlit-cropper
 opencv-python-headless
+pandas
+openpyx1
