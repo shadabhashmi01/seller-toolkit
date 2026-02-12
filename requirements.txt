@@ -3,7 +3,7 @@ pytesseract
 pdf2image
 pillow
 numpy
-streamlit-cropper
 opencv-python-headless
 pandas
-openpyx1
+openpyxl
+streamlit-cropper
