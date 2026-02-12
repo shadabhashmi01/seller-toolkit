@@ -6,6 +6,11 @@ import io, re, zipfile, hashlib
 from pdf2image import convert_from_bytes
 from streamlit_cropper import st_cropper
 import pandas as pd
+if "action" not in st.session_state:
+    st.session_state["action"] = None
+
+if "apply_all" not in st.session_state:
+    st.session_state["apply_all"] = False
 
 st.set_page_config(page_title="Paper + Seller System", layout="centered")
 st.title("📄 Paper + Seller System")
@@ -264,4 +269,5 @@ with tab3:
         st.write("Product:", detect_product(text))
         st.write("Size:", detect_size(text))
         st.write("Order ID:", extract_order_id(text))
+
 
