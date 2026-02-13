@@ -2,21 +2,19 @@ import streamlit as st
 import pytesseract
 from PIL import Image
 import cv2, numpy as np
-import io, re, zipfile, hashlib
+import io, re, zipfile
 from pdf2image import convert_from_bytes
 import pandas as pd
 
-st.set_page_config(page_title="Paper + Seller Toolkit", layout="centered")
-st.title("📄 Paper + Seller Toolkit")
+st.set_page_config(page_title="Smart Paper & Seller Toolkit", layout="centered")
+st.title("📄 Smart Paper & Seller Toolkit")
 
 # ---------------- SESSION ----------------
 
 if "labels" not in st.session_state:
     st.session_state.labels=[]
-
 if "df" not in st.session_state:
     st.session_state.df=None
-
 if "crop_box" not in st.session_state:
     st.session_state.crop_box=None
 
@@ -73,17 +71,17 @@ def apply_crop(img):
 
 # ================= TABS =================
 
-tab1,tab2=st.tabs(["🔍 Camera / Search","📦 Seller Toolkit"])
+tab1,tab2,tab3=st.tabs(["🔍 Scan & Search","📦 Seller Toolkit","🧠 Quick Label Check"])
 
 # =====================================================
-# TAB 1 — CAMERA + SEARCH
+# TAB 1 — SCAN & SEARCH
 # =====================================================
 
 with tab1:
 
     cam=st.camera_input("Take Photo")
     upload=st.file_uploader("Upload Image or PDF",type=["png","jpg","jpeg","pdf"])
-    query=st.text_input("Search text")
+    query=st.text_input("Search word / number")
 
     file=cam if cam else upload
 
@@ -94,26 +92,25 @@ with tab1:
         else:
             pages=[Image.open(file).convert("RGB")]
 
-        full_text=""
-        ocr_data=[]
+        full=""
+        ocr=[]
 
         for p in pages:
             fixed=preprocess(p)
             data=pytesseract.image_to_data(fixed,output_type=pytesseract.Output.DICT)
             text=pytesseract.image_to_string(fixed,config="--psm 6")
-            ocr_data.append(data)
-            full_text+=text+"\n\n"
+            ocr.append(data)
+            full+=text+"\n\n"
 
         st.image(pages[0],use_container_width=True)
-        st.text_area("Extracted Text",full_text,height=200)
-        st.download_button("⬇ Download Text",full_text,"text.txt")
+        st.text_area("Extracted Text",full,height=200)
+        st.download_button("⬇ Download Text",full,"text.txt")
 
         if query:
             found=False
-            for pi,data in enumerate(ocr_data):
+            for pi,data in enumerate(ocr):
                 for i in range(len(data["text"])):
                     if clean(query) in clean(data["text"][i]):
-                        st.success("Found on page "+str(pi+1))
                         crop=pages[pi].crop((
                             data["left"][i],
                             data["top"][i],
@@ -121,8 +118,8 @@ with tab1:
                             data["top"][i]+data["height"][i]
                         ))
                         st.image(crop,use_container_width=True)
-                        buf=io.BytesIO(); crop.save(buf,"PNG")
-                        st.download_button("⬇ Download Found Area",buf.getvalue(),"found.png")
+                        b=io.BytesIO(); crop.save(b,"PNG")
+                        st.download_button("⬇ Download Found Area",b.getvalue(),"found.png")
                         found=True
                         break
                 if found: break
@@ -143,28 +140,21 @@ with tab2:
         records=[]
         seen=set()
 
-        with st.spinner("Processing labels..."):
+        for pdf in pdfs:
+            pages=convert_from_bytes(pdf.getvalue(),dpi=200)
+            for page in pages:
+                fixed=preprocess(page)
+                text=pytesseract.image_to_string(fixed,config="--psm 6")
 
-            for pdf in pdfs:
-                pages=convert_from_bytes(pdf.getvalue(),dpi=200)
+                prod=detect_product(text)
+                size=detect_size(text)
+                oid=extract_order_id(text)
 
-                for page in pages:
-                    fixed=preprocess(page)
-                    text=pytesseract.image_to_string(fixed,config="--psm 6")
+                if oid and oid in seen: continue
+                if oid: seen.add(oid)
 
-                    product=detect_product(text)
-                    size=detect_size(text)
-                    oid=extract_order_id(text)
-
-                    if oid and oid in seen: continue
-                    if oid: seen.add(oid)
-
-                    labels.append(page)
-                    records.append({
-                        "product":product,
-                        "size":size,
-                        "order":oid
-                    })
+                labels.append(page)
+                records.append({"product":prod,"size":size,"order":oid})
 
         st.session_state.labels=labels
         st.session_state.df=pd.DataFrame(records)
@@ -178,8 +168,7 @@ with tab2:
         summary=df.groupby(["product","size"]).size().reset_index(name="qty")
         st.dataframe(summary,use_container_width=True)
 
-        st.subheader("Crop (enter pixel values)")
-
+        st.subheader("Crop (pixels)")
         st.image(labels[0],use_container_width=True)
 
         c1,c2,c3,c4=st.columns(4)
@@ -188,20 +177,20 @@ with tab2:
         w=c3.number_input("Width",0,5000,400)
         h=c4.number_input("Height",0,5000,400)
 
-        if st.button("Apply Crop To ALL"):
+        if st.button("Apply Crop To All"):
             st.session_state.crop_box=(x,y,w,h)
 
         colA,colB=st.columns(2)
 
         with colA:
-            if st.button("📄 Merge All"):
+            if st.button("Merge All"):
                 buf=io.BytesIO()
                 imgs=[apply_crop(i) for i in labels]
                 imgs[0].save(buf,format="PDF",save_all=True,append_images=imgs[1:])
                 st.download_button("⬇ Download Merged PDF",buf.getvalue(),"merged.pdf")
 
         with colB:
-            if st.button("⬇ ZIP All"):
+            if st.button("ZIP All"):
                 zbuf=io.BytesIO()
                 with zipfile.ZipFile(zbuf,"w") as z:
                     for i,l in enumerate(labels):
@@ -210,7 +199,6 @@ with tab2:
                         z.writestr(f"label_{i+1}.png",b.getvalue())
                 st.download_button("⬇ Download ZIP",zbuf.getvalue(),"labels.zip")
 
-        # grouped PDFs
         grouped={}
         for i,row in df.iterrows():
             key=f"{row['product']} - {row['size']}"
@@ -225,9 +213,28 @@ with tab2:
 
         st.download_button("⬇ Download Grouped PDFs",gbuf.getvalue(),"grouped_labels.zip")
 
-        # packing excel
         excel=io.BytesIO()
         summary.to_excel(excel,index=False)
         st.download_button("⬇ Download Packing Excel",excel.getvalue(),"packing.xlsx")
 
-st.caption("Mobile safe • Cloud safe • Offline OCR")
+# =====================================================
+# TAB 3 — QUICK LABEL CHECK
+# =====================================================
+
+with tab3:
+
+    cam=st.camera_input("Take Label Photo")
+    upload=st.file_uploader("Upload Label Image",type=["png","jpg","jpeg"])
+    file=cam if cam else upload
+
+    if file:
+        img=Image.open(file).convert("RGB")
+        fixed=preprocess(img)
+        text=pytesseract.image_to_string(fixed,config="--psm 6")
+
+        st.image(img,use_container_width=True)
+        st.write("Product:",detect_product(text))
+        st.write("Size:",detect_size(text))
+        st.write("Order ID:",extract_order_id(text))
+
+st.caption("Offline • Mobile Friendly • Seller Ready")
